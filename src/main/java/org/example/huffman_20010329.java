@@ -4,44 +4,47 @@ import java.io.*;
 import java.util.*;
 
 public class huffman_20010329 {
-    //“I acknowledge that I am aware of the academic integrity guidelines of this course,
-    // and that I worked on this assignment independently without any unauthorized help”.
     private final String filePath;
-    private final int n; // chunck size
+    private final int chunkSize;
 
-    private String fileExtension;
-    private int chunkSize;
-
-    public huffman_20010329(String filePath, int n) {
+    public huffman_20010329(String filePath, int chunkSize) {
         this.filePath = filePath;
-        this.n = n;
+        this.chunkSize = chunkSize;
     }
 
-    private Map<ByteArray, Integer> calculateFreq() throws IOException {
-        Map<ByteArray, Integer> freq = new HashMap<>();
-
-        try (FileInputStream inputStream = new FileInputStream(filePath)) {
-            byte[] buffer = new byte[n];
-            int numberOfBytesRead;
-
-            while ((numberOfBytesRead = inputStream.read(buffer)) != -1) {
-                byte[] data = numberOfBytesRead == n ? buffer : Arrays.copyOf(buffer, numberOfBytesRead); // handle the case of last chunck in the file if its < n bytes
-                ByteArray key = new ByteArray(data);
-                freq.put(key, freq.getOrDefault(key, 0) + 1);
-            }
+    private static String convertByteToBitString(boolean isLastByte, byte b) {
+        int byteValue = b & 0xFF; // Convert to unsigned
+        String binaryString = Integer.toBinaryString(byteValue);
+        if (isLastByte) {
+            return binaryString; // Return as-is for the last byte
+        } else {
+            return String.format("%8s", binaryString).replace(' ', '0'); // Pad with zeros to make 8 bits
         }
-        freq.forEach((key, value) -> System.out.println("Byte: " + Arrays.toString(key.getData()) + ", Freq: " + value));
-        return freq;
     }
 
-    private void printTree(TreeNode root, String indent) {
-        if (root == null) {
-            return;
-        }
-        System.out.println(indent + "Node: " + (root.getByteArray() == null ? "Internal" : Arrays.toString(root.getByteArray().getData())) + ", Freq: " + root.getFreq());
-        printTree(root.getLeftChild(), indent + "    ");
-        printTree(root.getRightChild(), indent + "    ");
+    public void compress() throws IOException {
+        long startTime = System.currentTimeMillis();
+        Map<ByteArray, Integer> freq = calculateFreq();
+        long endTime = System.currentTimeMillis();
+        System.out.println("Calculate freq time: " + (endTime - startTime) + "ms");
+        startTime = System.currentTimeMillis();
+        TreeNode root = buildHuffmanTree(freq);
+        endTime = System.currentTimeMillis();
+        System.out.println("Build Huffman tree time: " + (endTime - startTime) + "ms");
+        startTime = System.currentTimeMillis();
+        Map<ByteArray, String> codeWords = generateCodeWords(root);
+        endTime = System.currentTimeMillis();
+        System.out.println("Generate code words time: " + (endTime - startTime) + "ms");
+        startTime = System.currentTimeMillis();
+        compressData(filePath, codeWords);
+        endTime = System.currentTimeMillis();
+        System.out.println("Compress data time: " + (endTime - startTime) + "ms");
     }
+
+    public void decompress(String inputFilePath, String outputFilePath) throws IOException {
+        decompressData(inputFilePath, outputFilePath);
+    }
+
 
     private TreeNode buildHuffmanTree(Map<ByteArray, Integer> freq) {
         PriorityQueue<TreeNode> queue = new PriorityQueue<>(Comparator.comparingInt(TreeNode::getFreq));
@@ -56,245 +59,154 @@ public class huffman_20010329 {
         return queue.poll();
     }
 
+    private Map<ByteArray, Integer> calculateFreq() throws IOException {
+        Map<ByteArray, Integer> freq = new HashMap<>();
+        // Set a larger buffer size that is a multiple of chunkSize
+        int bufferSize = chunkSize * 1024; // where N is an integer factor
 
-    private Map<ByteArray, bitSet_Extended> generateCodeWords(TreeNode root) {
-        Map<ByteArray, bitSet_Extended> codeWords = new HashMap<>();
-        DFS(root, new bitSet_Extended(), 0, codeWords);
+        try (FileInputStream inputStream = new FileInputStream(filePath)) {
+            byte[] buffer = new byte[bufferSize];
+            int bytesRead;
+            while ((bytesRead = inputStream.read(buffer)) != -1) {
+                // Process the buffer in smaller chunks of size chunkSize
+                for (int i = 0; i < bytesRead; i += chunkSize) {
+                    int end = Math.min(i + chunkSize, bytesRead);
+                    byte[] data = Arrays.copyOfRange(buffer, i, end);
+                    ByteArray key = new ByteArray(data);
+                    freq.put(key, freq.getOrDefault(key, 0) + 1);
+                }
+            }
+        }
+        return freq;
+    }
+
+    private Map<ByteArray, String> generateCodeWords(TreeNode root) {
+        Map<ByteArray, String> codeWords = new HashMap<>();
+        generateCodeWordsDFS(root, "", codeWords);
         return codeWords;
     }
 
-    private void DFS(TreeNode node, BitSet code, int length, Map<ByteArray, bitSet_Extended> codeWords) {
+    private void generateCodeWordsDFS(TreeNode node, String code, Map<ByteArray, String> codeWords) {
         if (node == null) {
             return;
         }
         if (node.getLeftChild() == null && node.getRightChild() == null) {
-            bitSet_Extended leafCode = (bitSet_Extended) code.clone();
-            leafCode.setSize(length);
-            codeWords.put(node.getByteArray(), leafCode);
-            System.out.println("Code Length: " + length);
-            System.out.println("Byte Array: " + Arrays.toString(node.getByteArray().getData()) + ", Code: " + bitSetToString(codeWords.get(node.getByteArray()), codeWords.get(node.getByteArray()).length()));
+            codeWords.put(node.getByteArray(), code);
             return;
         }
-        if (node.getLeftChild() != null) {
-            bitSet_Extended NodeCode = (bitSet_Extended) code.clone();
-            NodeCode.clear(length);
-            DFS(node.getLeftChild(), NodeCode, length + 1, codeWords);
-        }
-
-        if (node.getRightChild() != null) {
-            bitSet_Extended NodeCode = (bitSet_Extended) code.clone();
-            NodeCode.set(length);
-            DFS(node.getRightChild(), NodeCode, length + 1, codeWords);
-        }
+        generateCodeWordsDFS(node.getLeftChild(), code + "0", codeWords);
+        generateCodeWordsDFS(node.getRightChild(), code + "1", codeWords);
     }
 
-    private String bitSetToString(BitSet bitSet, int codeLength) {
-        StringBuilder builder = new StringBuilder();
-        for (int i = 0; i < codeLength; ++i) {
-            builder.append(bitSet.get(i) ? "1" : "0");
-        }
-        return builder.toString();
-    }
+// Rest of the class remains the same
 
-    private String bitSetToString(BitSet bitSet) {
-        if (bitSet.isEmpty()) {
-            return "0";
-        }
-        StringBuilder builder = new StringBuilder();
-        for (int i = 0; i < bitSet.length() || (i == 0 && bitSet.length() == 0); ++i) {
-            builder.append(bitSet.get(i) ? "1" : "0");
-        }
-        return builder.toString();
-    }
+    private void compressData(String filePath, Map<ByteArray, String> codeWords) throws IOException {
+        try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(filePath));
+             FileOutputStream fos = new FileOutputStream(filePath + ".huffman");
+             BufferedOutputStream bos = new BufferedOutputStream(fos);
+             DataOutputStream dos = new DataOutputStream(bos)) {
 
-
-    private BitSet Trimmer(BitSet bitSet, int length) {
-        BitSet helper = new BitSet(length);
-        for (int i = 0; i < length; i++) {
-            helper.set(i, bitSet.get(i));
-        }
-        return helper;
-    }
-
-
-    private void writeHeader(Map<ByteArray, bitSet_Extended> codeWords) throws IOException {
-        String outputFile = filePath + ".huffmanCompressed.bin";
-        try (FileOutputStream fos = new FileOutputStream(outputFile);
-             DataOutputStream dos = new DataOutputStream(fos)) {
-
-            String fileExtension = "";
-            int j = filePath.lastIndexOf('.');
-            if (j > 0) {
-                fileExtension = filePath.substring(j + 1);
-            }
-            dos.writeUTF(fileExtension);
-            dos.writeInt(n);
-
+            // Write header
             dos.writeInt(codeWords.size());
-            for (Map.Entry<ByteArray, bitSet_Extended> entry : codeWords.entrySet()) {
+            for (Map.Entry<ByteArray, String> entry : codeWords.entrySet()) {
                 byte[] byteArray = entry.getKey().getData();
+                String code = entry.getValue();
                 dos.writeInt(byteArray.length);
                 dos.write(byteArray);
-
-                bitSet_Extended bitSet = entry.getValue();
-                int length = bitSet.getSize();
-                dos.writeInt(length);
-                for (int i = 0; i < length; i++) {
-                    dos.writeBoolean(bitSet.get(i));
-                }
+                dos.writeUTF(code);
             }
-        }
-    }
 
-    private void compressData(Map<ByteArray, bitSet_Extended> codeWords) throws IOException {
-        String outputFilePath = filePath + ".huffmanCompressed.bin";
-        try (FileInputStream fis = new FileInputStream(filePath);
-             FileOutputStream fos = new FileOutputStream(outputFilePath, true);
-             BufferedOutputStream bos = new BufferedOutputStream(fos)) {
-            byte[] buffer = new byte[n];
-            int numberOfBytesRead;
-            bitSet_Extended compressedData = new bitSet_Extended();
-            int bitLength = 0;
-            while ((numberOfBytesRead = fis.read(buffer)) != -1) {
-                byte[] data = (numberOfBytesRead == n) ? buffer : Arrays.copyOf(buffer, numberOfBytesRead);
-                bitSet_Extended codeword = codeWords.get(new ByteArray(data));
-                if (codeword == null) {
-                    throw new IOException("Codeword not found for given ByteArray.");
-                }
+            // Adjusted buffer size - a factor of 1024 times the chunkSize
+            int bufferSize = 1024 * chunkSize;
+            byte[] largeBuffer = new byte[bufferSize];
+            int bytesRead;
+            StringBuilder sb = new StringBuilder();
 
-                // Append the codeword to the compressed data
-                for (int i = 0; i < codeword.getSize(); i++) {
-                    if (codeword.get(i)) {
-                        compressedData.set(bitLength);
+            while ((bytesRead = bis.read(largeBuffer)) != -1) {
+                // Process the large buffer in smaller chunks of size chunkSize
+                for (int start = 0; start < bytesRead; start += chunkSize) {
+                    int end = Math.min(start + chunkSize, bytesRead);
+                    byte[] chunk = Arrays.copyOfRange(largeBuffer, start, end);
+                    ByteArray key = new ByteArray(chunk);
+                    String code = codeWords.get(key);
+                    if (code != null) {
+                        sb.append(code);
                     }
-                    bitLength++;
                 }
 
-                // Write out compressed data in chunks
-                if (bitLength >= 8) { // For example, when we have 1KB of data
-                    writeBitSet(bos, compressedData, bitLength);
-                    compressedData.clear();
-                    bitLength = 0;
+                // Write if buffer is sufficiently filled and handle partial codes at the end
+                if (sb.length() >= bufferSize * 8) { // Assuming 8 bits per character
+                    int bitsToWrite = (sb.length() / 8) * 8; // Write full bytes only
+                    writeBits(bos, sb.substring(0, bitsToWrite));
+                    sb.delete(0, bitsToWrite); // Keep the remaining bits in the StringBuilder
                 }
             }
 
             // Write any remaining compressed data
-            if (bitLength > 0) {
-                writeBitSet(bos, compressedData, bitLength);
+            if (sb.length() > 0) {
+                writeBits(bos, sb.toString());
             }
         }
     }
 
-    private void writeBitSet(BufferedOutputStream bos, bitSet_Extended bitSet, int bitLength) throws IOException {
-        byte[] bytes = bitSet.toByteArray();
-        bos.write(bytes, 0, (int) Math.ceil(bitLength / 8.0));
-    }
-
-    void printCodeWords(Map<ByteArray, BitSet> codeWords) {
-        for (Map.Entry<ByteArray, BitSet> entry : codeWords.entrySet()) {
-            System.out.println(entry.getKey() + " " + entry.getValue());
+    private void writeBits(BufferedOutputStream bos, String bitString) throws IOException {
+        int index = 0;
+        while (index < bitString.length()) {
+            int nextIndex = Math.min(index + 8, bitString.length());
+            byte b = (byte) Integer.parseInt(bitString.substring(index, nextIndex), 2);
+            bos.write(b);
+            index = nextIndex;
         }
     }
 
-    public void compress() throws IOException {
-        Map<ByteArray, Integer> freq = calculateFreq();
-        TreeNode root = buildHuffmanTree(freq);
-        Map<ByteArray, bitSet_Extended> codeWords = generateCodeWords(root);
-        writeHeaderDataToTextFile_Compress(codeWords, filePath);
-        writeHeader(codeWords);
-        compressData(codeWords);
-        //printCodeWords(codeWords);
-        printTree(root, "");
-
-
-    }
-
-
-    // Helper method to invert the codeWords map
-    private Map<bitSet_Extended, ByteArray> invertCodeWordsMap(Map<ByteArray, bitSet_Extended> codeWords) {
-        Map<bitSet_Extended, ByteArray> invertedMap = new HashMap<>();
-        for (Map.Entry<ByteArray, bitSet_Extended> entry : codeWords.entrySet()) {
-            invertedMap.put(entry.getValue(), entry.getKey());
-        }
-        return invertedMap;
-    }
-
-    // Method to decompress the data using the codeWords map
-    private void decompressDataUsingMap(String inputFile, String outputFile) throws IOException {
-        Map<bitSet_Extended, ByteArray> invertedCodeWords;
-        Map<ByteArray, bitSet_Extended> codeWords = new HashMap<>();
-
-        try (FileInputStream fis = new FileInputStream(inputFile);
-             DataInputStream dis = new DataInputStream(fis);
-             FileOutputStream fos = new FileOutputStream(outputFile);
+    private void decompressData(String inputFilePath, String outputFilePath) throws IOException {
+        try (FileInputStream fis = new FileInputStream(inputFilePath);
+             BufferedInputStream bis = new BufferedInputStream(fis);
+             DataInputStream dis = new DataInputStream(bis);
+             FileOutputStream fos = new FileOutputStream(outputFilePath);
              BufferedOutputStream bos = new BufferedOutputStream(fos)) {
 
-            // Reading header
-            fileExtension = dis.readUTF();
-            chunkSize = dis.readInt();
-            int codeWordSize = dis.readInt();
-
-            // Reading code words
-            for (int i = 0; i < codeWordSize; i++) {
-                int byteArrayLength = dis.readInt();
-                byte[] byteArray = new byte[byteArrayLength];
+            // Read header to reconstruct Huffman codes
+            long startTime = System.currentTimeMillis();
+            int size = dis.readInt();
+            Map<String, ByteArray> invertedCodeWords = new HashMap<>();
+            for (int i = 0; i < size; i++) {
+                int length = dis.readInt();
+                byte[] byteArray = new byte[length];
                 dis.readFully(byteArray);
-                int bitSetLength = dis.readInt();
-                bitSet_Extended bitSet = new bitSet_Extended();
-                bitSet.setSize(bitSetLength);
-                for (int j = 0; j < bitSetLength; j++) {
-                    bitSet.set(j, dis.readBoolean());
+                String code = dis.readUTF();
+                invertedCodeWords.put(code, new ByteArray(byteArray));
+            }
+            long endTime = System.currentTimeMillis();
+            System.out.println("Read header time: " + (endTime - startTime) + "ms");
+
+
+            startTime = System.currentTimeMillis();
+            // Decompress the data
+            StringBuilder currentCode = new StringBuilder();
+            boolean isLastByte = false;
+            while (dis.available() > 0 || isLastByte) {
+                int nextByte = dis.read();
+                isLastByte = dis.available() == 0;
+                String bitString = convertByteToBitString(isLastByte, (byte) nextByte);
+
+                for (char bit : bitString.toCharArray()) {
+                    currentCode.append(bit);
+                    ByteArray data = invertedCodeWords.get(currentCode.toString());
+                    if (data != null) {
+                        bos.write(data.getData());
+                        currentCode.setLength(0); // Reset current code
+                    }
                 }
-                codeWords.put(new ByteArray(byteArray), bitSet);
+
+                if (isLastByte) {
+                    break; // Break out of the loop after processing the last byte
+                }
             }
-
-            invertedCodeWords = invertCodeWordsMap(codeWords);
-
-            bitSet_Extended currentBitSet = new bitSet_Extended();
-            int bitIndex = 0;
-
-            // Reading compressed data
-
+            endTime = System.currentTimeMillis();
+            System.out.println("Decompress data time: " + (endTime - startTime) + "ms");
         }
     }
-
-
-    // Main decompress method
-    public void decompress(String inputFile, String outputFile) throws IOException {
-        decompressDataUsingMap(inputFile, outputFile);
-    }
-
-    private void writeHeaderDataToTextFile_Compress(Map<ByteArray, bitSet_Extended> codeWords, String outputPath) throws IOException {
-        String headerFilePath = outputPath + "_header_compress.txt";
-        try (FileWriter writer = new FileWriter(headerFilePath)) {
-            writer.write("File Extension: " + fileExtension + "\n");
-            writer.write("Chunk Size: " + n + "\n");
-            writer.write("Code Words Size: " + codeWords.size() + "\n");
-
-            for (Map.Entry<ByteArray, bitSet_Extended> entry : codeWords.entrySet()) {
-                writer.write("Byte Array: " + Arrays.toString(entry.getKey().getData()) + ", ");
-                writer.write("BitSet: " + bitSetToString(entry.getValue(), entry.getValue().getSize()) + "     length = " + entry.getValue().getSize() + "\n");
-            }
-        }
-    }
-
-    private void writeHeaderDataToTextFile_Decompress(Map<ByteArray, bitSet_Extended> codeWords, String outputPath) throws IOException {
-        String headerFilePath = outputPath + "_header_decompress.txt";
-        try (FileWriter writer = new FileWriter(headerFilePath)) {
-            writer.write("File Extension: " + fileExtension + "\n");
-            writer.write("Chunk Size: " + n + "\n");
-            writer.write("Code Words Size: " + codeWords.size() + "\n");
-
-            for (Map.Entry<ByteArray, bitSet_Extended> entry : codeWords.entrySet()) {
-                writer.write("Byte Array: " + Arrays.toString(entry.getKey().getData()) + ", ");
-                writer.write("BitSet: " + bitSetToString(entry.getValue(), entry.getValue().getSize()) + "     length = " + entry.getValue().getSize() + "\n");
-            }
-        }
-    }
-
-
-    //private readHeader(inputFile)
-    //private decompressData(inputFile, outputFilePath, huffmanTree)
 
 
 }

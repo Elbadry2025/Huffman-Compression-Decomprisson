@@ -45,4 +45,8 @@ public class TreeNode {
     public void setByteArray(ByteArray byteArray) {
         this.byteArray = byteArray;
     }
+
+    public boolean isLeaf() {
+        return leftChild == null && rightChild == null;
+    }
 }
