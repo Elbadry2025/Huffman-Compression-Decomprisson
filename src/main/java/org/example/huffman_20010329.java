@@ -92,13 +92,13 @@ public class huffman_20010329 {
         endTime = System.currentTimeMillis();
         System.out.println("Generate code words time: " + (endTime - startTime) + "ms");
 
-        // Count the number of chunks
-        File file = new File(filePath);
-        long fileSize = file.length();
-        int chunkCount = (int) Math.ceil((double) fileSize / chunkSize);
+//        // Count the number of chunks
+//        File file = new File(filePath);
+//        long fileSize = file.length();
+//        int chunkCount = (int) Math.ceil((double) fileSize / chunkSize);
 
         startTime = System.currentTimeMillis();
-        compressData(filePath, codeWords, chunkCount); // Pass the chunkCount to the method
+        compressData(filePath, codeWords); // Pass the chunkCount to the method
         endTime = System.currentTimeMillis();
         System.out.println("Compress data time: " + (endTime - startTime) + "ms");
     }
@@ -113,16 +113,16 @@ public class huffman_20010329 {
         }
     }
 
-    private void compressData(String filePath, Map<ByteArray, String> codeWords, int chunkCount) throws IOException {
+    private void compressData(String filePath, Map<ByteArray, String> codeWords) throws IOException {
         try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(filePath));
              FileOutputStream fos = new FileOutputStream(filePath + ".huffman");
              BufferedOutputStream bos = new BufferedOutputStream(fos);
              DataOutputStream dos = new DataOutputStream(bos)) {
 
-            // Write the number of chunks as the first piece of header information
-            dos.writeInt(chunkCount);
+            // Reserve space for padding information at the beginning of the header
+            dos.writeByte(0); // Initial placeholder for padding
 
-            // Write the rest of the header
+            // Write the number of code words and each code word with its corresponding byte array
             dos.writeInt(codeWords.size());
             for (Map.Entry<ByteArray, String> entry : codeWords.entrySet()) {
                 byte[] byteArray = entry.getKey().getData();
@@ -132,14 +132,15 @@ public class huffman_20010329 {
                 dos.writeUTF(code);
             }
 
-            // Adjusted buffer size - a factor of 1024 times the chunkSize
+            // Initialize variables for compression
             int bufferSize = 1024 * chunkSize;
             byte[] largeBuffer = new byte[bufferSize];
             int bytesRead;
             StringBuilder sb = new StringBuilder();
+            int totalBits = 0; // Keep track of the total number of bits
 
+            // Process the file data and create Huffman encoded string
             while ((bytesRead = bis.read(largeBuffer)) != -1) {
-                // Process the large buffer in smaller chunks of size chunkSize
                 for (int start = 0; start < bytesRead; start += chunkSize) {
                     int end = Math.min(start + chunkSize, bytesRead);
                     byte[] chunk = Arrays.copyOfRange(largeBuffer, start, end);
@@ -147,23 +148,34 @@ public class huffman_20010329 {
                     String code = codeWords.get(key);
                     if (code != null) {
                         sb.append(code);
+                        totalBits += code.length();
                     }
                 }
 
-                // Write if buffer is sufficiently filled and handle partial codes at the end
-                if (sb.length() >= bufferSize * 8) { // Assuming 8 bits per character
-                    int bitsToWrite = (sb.length() / 8) * 8; // Write full bytes only
-                    writeBits(bos, sb.substring(0, bitsToWrite));
-                    sb.delete(0, bitsToWrite); // Keep the remaining bits in the StringBuilder
+                // Write the bits to the output stream
+                while (sb.length() >= 8) {
+                    writeBits(bos, sb.substring(0, 8));
+                    sb.delete(0, 8);
                 }
             }
 
-            // Write any remaining compressed data
-            if (sb.length() > 0) {
+            // Handle the last byte with padding if necessary
+            int paddingBits = 8 - (totalBits % 8);
+            if (paddingBits != 8) { // If padding is required
+                for (int i = 0; i < paddingBits; i++) {
+                    sb.append("0"); // Manually append each zero
+                }
+
                 writeBits(bos, sb.toString());
             }
+
+            // Go back and write the actual padding information at the beginning of the header
+            bos.flush(); // Ensure all data is written before seeking
+            fos.getChannel().position(0); // Seek to the beginning of the file
+            dos.writeByte(paddingBits); // Write the padding information
         }
     }
+
 
     private void decompressData(String inputFilePath, String outputFilePath) throws IOException {
         try (FileInputStream fis = new FileInputStream(inputFilePath);
@@ -172,8 +184,8 @@ public class huffman_20010329 {
              FileOutputStream fos = new FileOutputStream(outputFilePath);
              BufferedOutputStream bos = new BufferedOutputStream(fos)) {
 
-            // Read the number of chunks from the header
-            int chunkCount = dis.readInt();
+            // Read padding information
+            int paddingBits = dis.readByte();
 
             // Read the rest of the header to reconstruct Huffman codes
             int size = dis.readInt();
@@ -188,33 +200,38 @@ public class huffman_20010329 {
 
             // Decompress the data
             StringBuilder currentCode = new StringBuilder();
-            int chunksDecompressed = 0;
-            byte[] readBuffer = new byte[2048]; // Use a buffer to read chunks
+            byte[] readBuffer = new byte[2048];
             int bytesRead;
-            long time = System.currentTimeMillis();
-            while ((bytesRead = dis.read(readBuffer)) != -1 && chunksDecompressed < chunkCount) {
+            boolean isLastByte = false;
+            while ((bytesRead = dis.read(readBuffer)) != -1) {
                 for (int i = 0; i < bytesRead; i++) {
-                    String bitString = convertByteToBitString(false, readBuffer[i]);
+                    // Check if processing the last byte
+                    isLastByte = (bytesRead == i + 1) && (dis.available() == 0);
+
+                    String bitString = convertByteToBitString(isLastByte, readBuffer[i], paddingBits);
                     for (char bit : bitString.toCharArray()) {
                         currentCode.append(bit);
                         ByteArray data = invertedCodeWords.get(currentCode.toString());
                         if (data != null) {
                             bos.write(data.getData());
-                            currentCode.setLength(0); // Reset current code
-                            chunksDecompressed++;
-                            if (chunksDecompressed == chunkCount) {
-                                // Finish writing and exit if the last chunk is reached
-                                bos.flush();
-                                long endTime = System.currentTimeMillis();
-                                System.out.println("Decompress time Loop: " + (endTime - time) + "ms");
-                                return;
-                            }
+                            currentCode.setLength(0);
                         }
                     }
                 }
             }
             bos.flush();
         }
+    }
+
+    private String convertByteToBitString(boolean isLastByte, byte b, int paddingBits) {
+        int byteValue = b & 0xFF;
+        String binaryString = Integer.toBinaryString(byteValue);
+        binaryString = String.format("%8s", binaryString).replace(' ', '0');
+
+        if (isLastByte && paddingBits != 0) {
+            return binaryString.substring(0, binaryString.length() - paddingBits);
+        }
+        return binaryString;
     }
 
 
