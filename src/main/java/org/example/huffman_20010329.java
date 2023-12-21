@@ -12,33 +12,11 @@ public class huffman_20010329 {
         this.chunkSize = chunkSize;
     }
 
+
     private static String convertByteToBitString(boolean isLastByte, byte b) {
         int byteValue = b & 0xFF; // Convert to unsigned
         String binaryString = Integer.toBinaryString(byteValue);
-        if (isLastByte) {
-            return binaryString; // Return as-is for the last byte
-        } else {
-            return String.format("%8s", binaryString).replace(' ', '0'); // Pad with zeros to make 8 bits
-        }
-    }
-
-    public void compress() throws IOException {
-        long startTime = System.currentTimeMillis();
-        Map<ByteArray, Integer> freq = calculateFreq();
-        long endTime = System.currentTimeMillis();
-        System.out.println("Calculate freq time: " + (endTime - startTime) + "ms");
-        startTime = System.currentTimeMillis();
-        TreeNode root = buildHuffmanTree(freq);
-        endTime = System.currentTimeMillis();
-        System.out.println("Build Huffman tree time: " + (endTime - startTime) + "ms");
-        startTime = System.currentTimeMillis();
-        Map<ByteArray, String> codeWords = generateCodeWords(root);
-        endTime = System.currentTimeMillis();
-        System.out.println("Generate code words time: " + (endTime - startTime) + "ms");
-        startTime = System.currentTimeMillis();
-        compressData(filePath, codeWords);
-        endTime = System.currentTimeMillis();
-        System.out.println("Compress data time: " + (endTime - startTime) + "ms");
+        return String.format("%8s", binaryString).replace(' ', '0'); // Always pad to 8 bits
     }
 
     public void decompress(String inputFilePath, String outputFilePath) throws IOException {
@@ -98,15 +76,53 @@ public class huffman_20010329 {
         generateCodeWordsDFS(node.getRightChild(), code + "1", codeWords);
     }
 
-// Rest of the class remains the same
+    public void compress() throws IOException {
+        long startTime = System.currentTimeMillis();
+        Map<ByteArray, Integer> freq = calculateFreq();
+        long endTime = System.currentTimeMillis();
+        System.out.println("Calculate freq time: " + (endTime - startTime) + "ms");
 
-    private void compressData(String filePath, Map<ByteArray, String> codeWords) throws IOException {
+        startTime = System.currentTimeMillis();
+        TreeNode root = buildHuffmanTree(freq);
+        endTime = System.currentTimeMillis();
+        System.out.println("Build Huffman tree time: " + (endTime - startTime) + "ms");
+
+        startTime = System.currentTimeMillis();
+        Map<ByteArray, String> codeWords = generateCodeWords(root);
+        endTime = System.currentTimeMillis();
+        System.out.println("Generate code words time: " + (endTime - startTime) + "ms");
+
+        // Count the number of chunks
+        File file = new File(filePath);
+        long fileSize = file.length();
+        int chunkCount = (int) Math.ceil((double) fileSize / chunkSize);
+
+        startTime = System.currentTimeMillis();
+        compressData(filePath, codeWords, chunkCount); // Pass the chunkCount to the method
+        endTime = System.currentTimeMillis();
+        System.out.println("Compress data time: " + (endTime - startTime) + "ms");
+    }
+
+    private void writeBits(BufferedOutputStream bos, String bitString) throws IOException {
+        int index = 0;
+        while (index < bitString.length()) {
+            int nextIndex = Math.min(index + 8, bitString.length());
+            byte b = (byte) Integer.parseInt(bitString.substring(index, nextIndex), 2);
+            bos.write(b);
+            index = nextIndex;
+        }
+    }
+
+    private void compressData(String filePath, Map<ByteArray, String> codeWords, int chunkCount) throws IOException {
         try (BufferedInputStream bis = new BufferedInputStream(new FileInputStream(filePath));
              FileOutputStream fos = new FileOutputStream(filePath + ".huffman");
              BufferedOutputStream bos = new BufferedOutputStream(fos);
              DataOutputStream dos = new DataOutputStream(bos)) {
 
-            // Write header
+            // Write the number of chunks as the first piece of header information
+            dos.writeInt(chunkCount);
+
+            // Write the rest of the header
             dos.writeInt(codeWords.size());
             for (Map.Entry<ByteArray, String> entry : codeWords.entrySet()) {
                 byte[] byteArray = entry.getKey().getData();
@@ -149,16 +165,6 @@ public class huffman_20010329 {
         }
     }
 
-    private void writeBits(BufferedOutputStream bos, String bitString) throws IOException {
-        int index = 0;
-        while (index < bitString.length()) {
-            int nextIndex = Math.min(index + 8, bitString.length());
-            byte b = (byte) Integer.parseInt(bitString.substring(index, nextIndex), 2);
-            bos.write(b);
-            index = nextIndex;
-        }
-    }
-
     private void decompressData(String inputFilePath, String outputFilePath) throws IOException {
         try (FileInputStream fis = new FileInputStream(inputFilePath);
              BufferedInputStream bis = new BufferedInputStream(fis);
@@ -166,8 +172,10 @@ public class huffman_20010329 {
              FileOutputStream fos = new FileOutputStream(outputFilePath);
              BufferedOutputStream bos = new BufferedOutputStream(fos)) {
 
-            // Read header to reconstruct Huffman codes
-            long startTime = System.currentTimeMillis();
+            // Read the number of chunks from the header
+            int chunkCount = dis.readInt();
+
+            // Read the rest of the header to reconstruct Huffman codes
             int size = dis.readInt();
             Map<String, ByteArray> invertedCodeWords = new HashMap<>();
             for (int i = 0; i < size; i++) {
@@ -177,34 +185,35 @@ public class huffman_20010329 {
                 String code = dis.readUTF();
                 invertedCodeWords.put(code, new ByteArray(byteArray));
             }
-            long endTime = System.currentTimeMillis();
-            System.out.println("Read header time: " + (endTime - startTime) + "ms");
 
-
-            startTime = System.currentTimeMillis();
             // Decompress the data
             StringBuilder currentCode = new StringBuilder();
-            boolean isLastByte = false;
-            while (dis.available() > 0 || isLastByte) {
-                int nextByte = dis.read();
-                isLastByte = dis.available() == 0;
-                String bitString = convertByteToBitString(isLastByte, (byte) nextByte);
-
-                for (char bit : bitString.toCharArray()) {
-                    currentCode.append(bit);
-                    ByteArray data = invertedCodeWords.get(currentCode.toString());
-                    if (data != null) {
-                        bos.write(data.getData());
-                        currentCode.setLength(0); // Reset current code
+            int chunksDecompressed = 0;
+            byte[] readBuffer = new byte[2048]; // Use a buffer to read chunks
+            int bytesRead;
+            long time = System.currentTimeMillis();
+            while ((bytesRead = dis.read(readBuffer)) != -1 && chunksDecompressed < chunkCount) {
+                for (int i = 0; i < bytesRead; i++) {
+                    String bitString = convertByteToBitString(false, readBuffer[i]);
+                    for (char bit : bitString.toCharArray()) {
+                        currentCode.append(bit);
+                        ByteArray data = invertedCodeWords.get(currentCode.toString());
+                        if (data != null) {
+                            bos.write(data.getData());
+                            currentCode.setLength(0); // Reset current code
+                            chunksDecompressed++;
+                            if (chunksDecompressed == chunkCount) {
+                                // Finish writing and exit if the last chunk is reached
+                                bos.flush();
+                                long endTime = System.currentTimeMillis();
+                                System.out.println("Decompress time Loop: " + (endTime - time) + "ms");
+                                return;
+                            }
+                        }
                     }
                 }
-
-                if (isLastByte) {
-                    break; // Break out of the loop after processing the last byte
-                }
             }
-            endTime = System.currentTimeMillis();
-            System.out.println("Decompress data time: " + (endTime - startTime) + "ms");
+            bos.flush();
         }
     }
 
