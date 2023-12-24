@@ -1,11 +1,11 @@
+//“I acknowledge that I am aware of the academic integrity guidelines of this course,
+// and that I worked on this assignment independently without any unauthorized help”.
 package org.example;
 
 import java.util.Arrays;
 
 public class ByteArray {
-    //“I acknowledge that I am aware of the academic integrity guidelines of this course,
-    // and that I worked on this assignment independently without any unauthorized help”.
-    private final byte[] data;
+    public final byte[] data;
 
     public ByteArray(byte[] data) {
         this.data = data.clone();
